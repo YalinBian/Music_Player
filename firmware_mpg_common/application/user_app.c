@@ -73,13 +73,14 @@ Variable names shall start with "UserApp_" and be declared as static.
 static fnCode_type UserApp_StateMachine;            /* The state machine function pointer */
 static u32 UserApp_u32Timeout;                      /* Timeout counter used across states */
 
-static u16 UserApp_u16Frequency[]={0,523,586,658,697,783,879,987,262,293,329,349,392,440,494};/*some frequencies matched with do re mi fa .....*/
-static u16 UserApp_u16MusicNameNumber[50] = {0};
-static u16 UserApp_u16MusicName[100] = {0}; 
-static u8 UserApp_u8EmptyList[] = "Music list is empty!";                   /* test for showing names */
+static u16 UserApp_u16Frequency[]={0,523,586,658,697,783,879,987,262,293,329,349,392,440,494,1045,1171,1316,1393,1563,1755,1971};/*some frequencies matched with do re mi fa .....*/
+static u16 UserApp_u16MusicNameNumber[50] = {0};              /* store how many characters of names*/
+static u16 UserApp_u16MusicName[100] = {0};                    /*store every characters of all the names */
+static u8 UserApp_u8EmptyList[] = "Music list is empty!";     /* if the list is empty,show it */
 static u8 UserApp_u8WelcomeScreen[] = "Welcome to H_M_P!";  /* welcome screen */
-static u8 UserApp_u8Start[] = "START";                      /*  */
-static u8 UserApp_u8StartScreen[] = "NEXT LAST  PLAY BACK"; /*  */
+static u8 UserApp_u8Open[] = "OPEN";                      
+static u8 UserApp_u8OpenScreen[] = "NEXT LAST PLAY CLOSE"; 
+static u8 UserApp_u8CloseScreen[] = "NEXT LAST PLAY  OPEN"; 
 /**********************************************************************************************************************
 Function Definitions
 **********************************************************************************************************************/
@@ -122,20 +123,20 @@ void UserAppInitialize(void)
   {
     /* Channel is configured */
     UserApp_StateMachine = UserAppSM_Idle;
-    AntOpenChannel();
   }
   else
   {
     /* The task isn't properly initialized, so don't run */
     UserApp_StateMachine = UserAppSM_Error;
   }
+  /* initialize the lcd */
   LedOff(LCD_RED);
   LedOn(LCD_GREEN);
   LedOn(LCD_BLUE);
   LCDClearChars(LINE1_START_ADDR, 20);
   LCDClearChars(LINE2_START_ADDR, 20);
   LCDMessage(LINE1_START_ADDR, UserApp_u8WelcomeScreen);
-  LCDMessage(LINE2_START_ADDR + 15, UserApp_u8Start);
+  LCDMessage(LINE2_START_ADDR + 16, UserApp_u8Open);
 } /* end UserAppInitialize() */
 
 
@@ -172,21 +173,29 @@ State Machine Function Definitions
 /* Wait for a message to be queued */
 static void UserAppSM_Idle(void)
 {
-  static u16 u16Notes[100]={0};
-  static u8 u8LastData[]={0};
-  static u8 u8Music[10]={0};
-  static u8 u8MusicName[20] = "xxxxxxxxxxxxxxxxxxx";
-  static u8 u8MiddleVariable;
-  static u8 u8NameCount = 0;
-  static u16 u16NotesCount = 0;
-  static u8 u8MusicCount = 1;
-  static u8 u8MusicCountOnLCD = 0;
-  static bool bOpenBuzzer = FALSE;
-  static bool bBack = FALSE;
-  static u8 u8Time = 10;
-  static u8 u8LoopTime = 50;
-  static u8 u8NotesPlace = 0;
+  static u16 u16Notes[100]={0};       /* save all notes have been sent */
+  static u8 u8LastData[]={0};         /* save the last notes have been sent to compare with the current one*/
+  static u8 u8Music[10]={0};          /* save how many notes a music have */ 
+  static u8 u8MusicName[20] = "";     /* to save the current name be selected on lcd*/
+  static u8 u8MiddleVariable;         /* a MiddleVariable to send the name in UserApp_u16MusicName to u8MusicName */
+  static u8 u8NameCount = 0;          /* represent the position of the character in the name  */
+  static u16 u16NotesCount = 0;       /* a counter to count how many notes have been sent */
+  static u8 u8MusicCount = 1;         /* a counter to count how many music have finished ,start from 1*/
+  static u8 u8MusicCountOnLCD = 0;    /* a counter to count which song have been selected on lcd */
+  static bool bOpenBuzzer = FALSE;    /* to judge if the buzzer should be turned on */
+  static bool bClose = FALSE;         /* to judge if the channel is closed */
+  static bool bOpen = FALSE;          /* to judge if the channel have been  opened by user */
+  static u8 u8Time = 5;               /* little loop to make the buzzer play well*/
+  static u8 u8LoopTime = 50;          /* big loop to make the system work well*/
+  static u8 u8NotesPlace = 0;         /* record the place of the notes of the music which have been selected */
+  static LedNumberType aeCurrentLed[]  = {LCD_GREEN, LCD_RED, LCD_BLUE, LCD_GREEN, LCD_RED, LCD_BLUE};
+  static bool abLedRateIncreasing[]   = {TRUE,      FALSE,   TRUE,     FALSE,     TRUE,    FALSE};
+  static u8 u8CurrentLedIndex  = 0;
+  static u8 u8LedCurrentLevel  = 0;
+  static u8 u8DutyCycleCounter = 0;
+  static u8 u8LCDChangeTime = 20;
   u8LoopTime--;
+  u8LCDChangeTime--;
   /*  Get the notes sent from the master  */
   if( AntReadData() )
   {
@@ -207,11 +216,11 @@ static void UserAppSM_Idle(void)
         }
         else if(G_au8AntApiCurrentData[0] == 200)
         {
-          /* 200 reprents music have finished,don't reserve it in the array */
+          /* 200 reprents name have finished,don't reserve it in the array */
         }
         /* in order to get the notes correctly, we'd better get different messeages each time,
            so,if the master wants to send same note,we can make a symbol such as 20 here*/
-        else if(G_au8AntApiCurrentData[0] != 20)
+        else if(G_au8AntApiCurrentData[0] != 30)
         {
           u16NotesCount++;
           u16Notes[u16NotesCount-1] = G_au8AntApiCurrentData[0];
@@ -231,19 +240,32 @@ static void UserAppSM_Idle(void)
      /* A channel period has gone by: typically this is when new data should be queued to be sent */
     }
   } /* end AntReadData() */ 
-  /*   Buttons and buzzers' function  */
+   /*   Buttons and buzzers' function  */
   if(u8LoopTime == 0)
   {
     u8LoopTime = 50;
+    /* A slave channel can close on its own, so check channel status when i opened the channel , 
+    if the channel closed,show on the lcd to let user open the channel*/
+    if(bOpen)
+    {
+      if(AntRadioStatus() != ANT_OPEN)
+      {
+        LCDClearChars(LINE2_START_ADDR, 20);
+        LCDMessage(LINE2_START_ADDR, UserApp_u8CloseScreen);
+        bClose = FALSE;
+        bOpen = FALSE;
+      }
+    }
     /* use button0 to choose next song */
     if( WasButtonPressed(BUTTON0) )
     {
       /* Be sure to acknowledge the button press */
       ButtonAcknowledge(BUTTON0);
       u8NameCount = 0;
+      /* if u8MusicCountOnLCD == u8MusicCount-1,press button 0 means start from first music,else the next one */
       if(u8MusicCountOnLCD == u8MusicCount - 1 )
       {
-        u8MusicCountOnLCD = 0;
+        u8MusicCountOnLCD = 1;
         u8NotesPlace = 0;
       }
       else
@@ -258,8 +280,12 @@ static void UserAppSM_Idle(void)
         u8NameCount++;
       }
       u8MusicName[u8NameCount] = '\0';
-      LCDClearChars(LINE1_START_ADDR, 20);
-      LCDMessage(LINE1_START_ADDR, u8MusicName);
+      if( u8MusicCount != 1)
+      {
+        LCDClearChars(LINE1_START_ADDR, 20);
+        LCDMessage(LINE1_START_ADDR, u8MusicName);
+      }
+
     }
     /* use button1 to choose last song */
     if( WasButtonPressed(BUTTON1) )
@@ -267,7 +293,8 @@ static void UserAppSM_Idle(void)
       /* Be sure to acknowledge the button press */
       ButtonAcknowledge(BUTTON1);
       u8NameCount = 0;
-      if(u8MusicCountOnLCD == 0)
+      /* u8MusicCountOnLCD == 1 ,represents next one is the final one  */
+      if(u8MusicCountOnLCD == 1)
       {
         u8MusicCountOnLCD = u8MusicCount - 1;
         u8NotesPlace = u8Music[u8MusicCountOnLCD-1];
@@ -275,7 +302,7 @@ static void UserAppSM_Idle(void)
       else
       {
         u8MusicCountOnLCD--;
-        if(u8MusicCountOnLCD == 0)
+        if(u8MusicCountOnLCD == 1)
         {
           u8NotesPlace = 0;
         }
@@ -284,6 +311,7 @@ static void UserAppSM_Idle(void)
           u8NotesPlace = u8Music[u8MusicCountOnLCD-1];
         }
       }
+      /* move name from UserApp_u16MusicName to u8MusicName*/
       for(u8 j = UserApp_u16MusicNameNumber[u8MusicCountOnLCD -1]; j<UserApp_u16MusicNameNumber[u8MusicCountOnLCD] ;j++)
       {
         u8MiddleVariable = UserApp_u16MusicName[j];
@@ -291,18 +319,27 @@ static void UserAppSM_Idle(void)
         u8NameCount++;
       }
       u8MusicName[u8NameCount] = '\0';
-      LCDClearChars(LINE1_START_ADDR, 20);
-      LCDMessage(LINE1_START_ADDR, u8MusicName);
+      /* to make sure we have music */
+      if( u8MusicCount != 1)
+      {
+        LCDClearChars(LINE1_START_ADDR, 20);
+        LCDMessage(LINE1_START_ADDR, u8MusicName);
+      }
     }
     /* use button2 to play or end the song */
     if( WasButtonPressed(BUTTON2) )
     {
-      /* Be sure to acknowledge the button press */
+      /*  Be sure to acknowledge the button press */
       ButtonAcknowledge(BUTTON2);
       if(bOpenBuzzer == FALSE)
       {
         bOpenBuzzer = TRUE;
+        /* Start with red LED on 100%, green and blue off */
+        LedPWM(LCD_RED, LED_PWM_100);
+        LedPWM(LCD_GREEN, LED_PWM_0);
+        LedPWM(LCD_BLUE, LED_PWM_0);
       }
+      /*  when stop the music, turn off all leds too,change lcd to the start color */
       else
       {
         PWMAudioOff(BUZZER1);
@@ -315,6 +352,9 @@ static void UserAppSM_Idle(void)
         LedOff(YELLOW);
         LedOff(ORANGE);
         LedOff(RED);
+        LedOn(LCD_BLUE);
+        LedOn(LCD_GREEN);
+        LedOff(LCD_RED);
       }
     }
     /* use button3 to get into play screen or back to welcome screen */
@@ -322,23 +362,26 @@ static void UserAppSM_Idle(void)
     {
       /* Be sure to acknowledge the button press */
       ButtonAcknowledge(BUTTON3);
-      /* back to welcome screen */
-      if(bBack)
+      /* back to welcome screen if*/
+      if(bClose)
       {
-        LCDClearChars(LINE1_START_ADDR, 20);
+        AntCloseChannel();
+        bOpen = FALSE;
         LCDClearChars(LINE2_START_ADDR, 20);
-        LCDMessage(LINE1_START_ADDR, UserApp_u8WelcomeScreen);
-        LCDMessage(LINE2_START_ADDR + 15, UserApp_u8Start);
-        bBack = FALSE;
+        LCDMessage(LINE2_START_ADDR, UserApp_u8CloseScreen);
+        bClose = FALSE;
       }
-      /* get into play screen */
+      /* get into play_screen */
       else
       {
+        AntOpenChannel();
+        bOpen  = TRUE;        
         LCDClearChars(LINE1_START_ADDR, 20);
         LCDClearChars(LINE2_START_ADDR, 20);
-        LCDMessage(LINE2_START_ADDR, UserApp_u8StartScreen);
-        bBack = TRUE;
-        if(u8MusicCount == 0)
+        LCDMessage(LINE2_START_ADDR, UserApp_u8OpenScreen);
+        bClose = TRUE;
+        /* u8MusicCount == 1 means no music have finished,so the list is empty */
+        if(u8MusicCount == 1)
         {
           LCDMessage(LINE1_START_ADDR, UserApp_u8EmptyList);
         }
@@ -348,13 +391,14 @@ static void UserAppSM_Idle(void)
         }
       }
     }
-    /*  Buzzer's function  */
+    /*   Buzzer's function  */
     if(bOpenBuzzer)
     {
       u8Time--;
       if(u8Time == 0)
       {
-        u8Time = 10;
+        u8Time = 5;
+        /* turn off all leds first, to make sure when a frequency is played, only one led is on*/
         LedOff(WHITE);
         LedOff(PURPLE);
         LedOff(BLUE);
@@ -363,9 +407,10 @@ static void UserAppSM_Idle(void)
         LedOff(YELLOW);
         LedOff(ORANGE);
         LedOff(RED);
-        /**/
+        /* set the frequency and open the buzzer */
         PWMAudioSetFrequency(BUZZER1, UserApp_u16Frequency[u16Notes[u8NotesPlace]] );
-        PWMAudioOn(BUZZER1);
+        PWMAudioOn(BUZZER1);        
+        /*  when buzzer is on ,let an led on ,correspond to some frequencies  */
         switch(UserApp_u16Frequency[u16Notes[u8NotesPlace]])
         {
         case 523:
@@ -410,58 +455,125 @@ static void UserAppSM_Idle(void)
         case 494:
           LedOn(ORANGE);
           break;
+        case 1045:
+          LedOn(WHITE);
+          break;
+        case 1171:
+          LedOn(PURPLE);
+          break;
+        case 1316:
+          LedOn(BLUE);
+          break;
+        case 1393:
+          LedOn(CYAN);
+          break;
+        case 1563:
+          LedOn(GREEN);
+          break;
+        case 1755:
+          LedOn(YELLOW);
+          break;
+        case 1971:
+          LedOn(ORANGE);
+          break;
         }
-        u8NotesPlace++;
-        /* the song have finished */
+        u8NotesPlace++;        
         if(u8MusicCountOnLCD == 0)
         {
           u8NotesPlace = 0;
         }
+        /* the song have finished */
         else if( u8NotesPlace == u8Music[u8MusicCountOnLCD])
         {
           u8NotesPlace = u8Music[u8MusicCountOnLCD-1];
+          for(u8 i = 0; i<200; i++)
+          {
+            PWMAudioOff(BUZZER1);
+          }
         }
-      } /*   */
-    } /* end bOnBuzzer */
-  } /*   */
+      } /*end u8Time */
+    } /* end bOnBuzzer*/    
+  } /*end loop time*/
+  /*  make lcd's color changes in a speed  */
+  if(u8LCDChangeTime == 0)
+  {
+    u8LCDChangeTime = 20;
+    if(bOpenBuzzer)
+    {
+      LedPWM( (LedNumberType)aeCurrentLed[u8CurrentLedIndex], (LedRateType)u8LedCurrentLevel);
+      /* Update the current level based on which way it's headed */
+      if( abLedRateIncreasing[u8CurrentLedIndex] )
+      {
+        u8LedCurrentLevel++;
+      }
+      else
+      {
+        u8LedCurrentLevel--;
+      }
+
+    /* Change direction once we're at the end */
+      u8DutyCycleCounter++;
+      if(u8DutyCycleCounter == 20)
+      {
+        u8DutyCycleCounter = 0;
+        
+        /* Watch for the indexing variable to reset */
+        u8CurrentLedIndex++;
+        if(u8CurrentLedIndex == sizeof(aeCurrentLed))
+        {
+          u8CurrentLedIndex = 0;
+        }
+        
+        /* Set the current level based on what direction we're now going */
+        u8LedCurrentLevel = 20;
+        if(abLedRateIncreasing[u8CurrentLedIndex])
+        {
+           u8LedCurrentLevel = 0;
+        }
+      }/* end u8DutyCycleCounter*/
+    }/* end bOpenBuzzer */
+  }/* end u8LCDChangeTime */
 } /* end UserAppSM_Idle() */
-/*-------------------------------------------------------------------------------------------------------------------*/
-/* Handle an error */
-static void UserAppSM_Error(void)          
-{
-  
-} /* end UserAppSM_Error() */
-
-
 /*-------------------------------------------------------------------------------------------------------------------*/
 /* Name a song */
 static void UserAppSM_Name(void)          
 {
-  static u16 u16MusicNameNumberCount = 0;
-  static u8 u8MusiNameCount = 1;
-  static u8 u8LastData[] = {0};
+  static u16 u16MusicNameNumberCount = 0;  /**/
+  static u8 u8MusiNameCount = 1;           /**/
+  static u8 u8LastData[] = {0};            /**/
    /* Always check for ANT messages */
   if( AntReadData() )
   {
      /* New data message: check what it is */
     if(G_eAntApiCurrentMessageClass == ANT_DATA)
     {
-      if(G_au8AntApiCurrentData[0] == 200)
+      /*  We got some data,judge if it is the same with the last one  */
+      if(G_au8AntApiCurrentData[0] != u8LastData[0])
       {
-        UserApp_u16MusicNameNumber[u8MusiNameCount] = u16MusicNameNumberCount;
-        u8MusiNameCount++;
-        UserApp_StateMachine = UserAppSM_Idle;
-      }
-      else if(G_au8AntApiCurrentData[0] == 50)
-      {
-        /*  50 represents a music finished , do not save it in the name array*/
-      }
-      /*  We got some data,save it to an array  */
-      else if(G_au8AntApiCurrentData[0] != u8LastData[0])
-      {
-        UserApp_u16MusicName[u16MusicNameNumberCount] = G_au8AntApiCurrentData[0];
-        u16MusicNameNumberCount++;
-        u8LastData[0] = G_au8AntApiCurrentData[0];
+        /* 200 means the master has finished the name */
+        if(G_au8AntApiCurrentData[0] == 200)
+        {
+          UserApp_u16MusicNameNumber[u8MusiNameCount] = u16MusicNameNumberCount;
+          u8MusiNameCount++;
+          UserApp_StateMachine = UserAppSM_Idle;
+        }
+        else if(G_au8AntApiCurrentData[0] == 50)
+        {
+          /*  50 represents a music finished , do not save it in the name array*/
+        }
+        else if(G_au8AntApiCurrentData[0] != 30)
+        {
+          UserApp_u16MusicName[u16MusicNameNumberCount] = G_au8AntApiCurrentData[0];
+          u16MusicNameNumberCount++;
+          u8LastData[0] = G_au8AntApiCurrentData[0];
+        }
+        /* 30 represents the master need to send the same message with the last one */
+        else
+        { 
+          UserApp_u16MusicName[u16MusicNameNumberCount] = UserApp_u16MusicName[u16MusicNameNumberCount - 1] ;
+          u16MusicNameNumberCount++;
+          u8LastData[0] = G_au8AntApiCurrentData[0];
+        }
       }
     } /* end if(G_eAntApiCurrentMessageClass == ANT_DATA) */
 
@@ -472,12 +584,18 @@ static void UserAppSM_Name(void)
   } /* end AntReadData() */
 } /* end UserAppSM_Name() */
 
+/*-------------------------------------------------------------------------------------------------------------------*/
+/* Handle an error */
+static void UserAppSM_Error(void)          
+{
+  
+} /* end UserAppSM_Error() */
 
 /*-------------------------------------------------------------------------------------------------------------------*/
 /* State to sit in if init failed */
 static void UserAppSM_FailedInit(void)          
 {
-    
+  
 } /* end UserAppSM_FailedInit() */
 
 
